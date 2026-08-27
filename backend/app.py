@@ -1,14 +1,18 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import string
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Annotated, Literal
 
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.staticfiles import StaticFiles
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from pydantic import BaseModel, Field
@@ -97,6 +101,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_FRONTEND_DIST = Path(__file__).resolve().parents[1] / "frontend" / "dist"
+
+
+def _serve_frontend():
+    """Mount the built React frontend so a single service hosts both API and UI."""
+    dist = _FRONTEND_DIST
+    if not (dist / "index.html").exists():
+        return
+    app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+
+    @app.get("/{full_path:path}", include_in_schema=False)
+    def spa_fallback(full_path: str):
+        candidate = (dist / full_path).resolve()
+        if full_path and candidate.is_file() and dist.resolve() in candidate.parents:
+            return FileResponse(candidate)
+        return FileResponse(dist / "index.html")
 
 
 def get_db():
@@ -1010,3 +1031,6 @@ def _startup():
             db.commit()
     finally:
         db.close()
+
+
+_serve_frontend()

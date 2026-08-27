@@ -97,8 +97,31 @@ handle the provisional → approved flow. The core pages (Dashboard, Students,
 Classes, Notices, Reports, Settings) read and write the backend through the
 generated client.
 
+## Platform admin
+
+A Clique operator (`role = platform_admin`) lands on `/platform` after signing
+in. That screen lists every school (pending / active / rejected) with
+**Approve** / **Deny** buttons and a **Provision school** form for manually
+provisioning an already-active school (then share the admin credentials with
+them). All of it talks to the `/api/platform/*` endpoints.
+
 ## Deployment
 
-- **Backend** — `render.yaml` (Render). Set a managed Postgres `DATABASE_URL`
-  and real `JWT_SECRET` / platform-admin credentials.
-- **Frontend** — `vercel.json` (Vercel). Set `VITE_API_URL` to the backend URL.
+Two supported paths:
+
+**A — Single service (recommended for simplicity):** build the whole thing into
+one web service with the included `Dockerfile` (Node builds the frontend, Python
+runs the API and serves the built UI). Same origin, so the app calls `/api`
+directly with no CORS and no cross-origin secrets. Works on Render (Docker),
+Railway, Fly.io, any Docker host.
+
+**B — Two services (backend / frontend split):**
+- Backend — `render.yaml` (Render). Set a managed Postgres `DATABASE_URL` and
+  real `JWT_SECRET` / platform-admin credentials.
+- Frontend — `vercel.json` (Vercel). Set `VITE_API_URL` to the backend URL in
+  the Vercel environment variables.
+
+Either way, on first boot the `platform_admin` is seeded from
+`PLATFORM_ADMIN_USERNAME` / `PLATFORM_ADMIN_PASSWORD` (for Render with
+`generateValue: true`, read the generated value in the Render env vars).
+Provision or approve schools, then share a school's login with its admin.

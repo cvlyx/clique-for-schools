@@ -1,5 +1,11 @@
-# Render blueprint for the Clique for Schools backend (FastAPI)
-# The platform-admin npm script (root package.json) runs this via uvicorn.
+# Render blueprint for the Clique for Schools API (FastAPI backend).
+#
+# Recommended production topology: Render hosts the API here and Vercel hosts
+# the frontend (see ../vercel.json), with the frontend's VITE_API_URL pointed
+# at this service. In local/single-VM deployments the backend can also serve
+# the built frontend itself (frontend/dist) so everything lives on one origin.
+# For a true single Render service, use a Dockerfile that installs Node + pnpm
+# and runs `pnpm build` before `uvicorn`.
 services:
   - type: web
     name: clique-backend
@@ -19,4 +25,4 @@ services:
       - key: PLATFORM_ADMIN_PASSWORD
         generateValue: true
       - key: ALLOWED_ORIGINS
-        value: https://clique-for-schools.vercel.app
+        value: https://<your-vercel-app>.vercel.app
