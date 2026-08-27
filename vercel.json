@@ -6,7 +6,10 @@
       "framework": "vite",
       "installCommand": "cd .. && pnpm install --frozen-lockfile || pnpm install",
       "buildCommand": "pnpm --filter @workspace/clique-for-schools build",
-      "outputDirectory": "dist"
+      "outputDirectory": "dist",
+      "rewrites": [
+        { "source": "/(.*)", "destination": "/index.html" }
+      ]
     },
     "backend": {
       "root": "backend",
