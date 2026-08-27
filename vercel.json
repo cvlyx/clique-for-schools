@@ -6,13 +6,16 @@
       "framework": "vite",
       "installCommand": "cd .. && pnpm install --frozen-lockfile || pnpm install",
       "buildCommand": "pnpm --filter @workspace/clique-for-schools build",
-      "outputDirectory": "dist",
-      "rewrites": [
-        { "source": "/((?!assets/).*)", "destination": "/index.html" }
-      ]
+      "outputDirectory": "dist"
+    },
+    "backend": {
+      "root": "backend",
+      "framework": "fastapi",
+      "entrypoint": "app:app"
     }
   },
   "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "backend" } },
     { "source": "/(.*)", "destination": { "service": "frontend" } }
   ]
 }
