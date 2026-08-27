@@ -1,0 +1,14 @@
+{
+  "name": "clique-for-schools",
+  "version": "1.0.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "packageManager": "pnpm@9.12.1",
+  "scripts": {
+    "dev": "pnpm --filter @workspace/clique-for-schools dev",
+    "build": "pnpm --filter @workspace/clique-for-schools build",
+    "serve": "pnpm --filter @workspace/clique-for-schools serve",
+    "typecheck": "pnpm --filter @workspace/clique-for-schools typecheck",
+    "backend": "cd backend && python3 -m uvicorn app:app --host 0.0.0.0 --port 8000 --reload"
+  }
+}

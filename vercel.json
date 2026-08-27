@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": "vite",
+  "rootDirectory": "frontend",
+  "buildCommand": "pnpm --filter @workspace/clique-for-schools build",
+  "outputDirectory": "dist",
+  "installCommand": "cd .. && pnpm install --frozen-lockfile || pnpm install"
+}

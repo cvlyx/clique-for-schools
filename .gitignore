@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+frontend/dist/
+packages/api-client-react/dist/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.pyc
+backend/.env
+backend/*.db
+backend/clique.db
+
+# Test / local
+backend/test_clique.db
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store

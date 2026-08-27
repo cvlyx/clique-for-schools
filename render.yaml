@@ -1,0 +1,22 @@
+# Render blueprint for the Clique for Schools backend (FastAPI)
+# The platform-admin npm script (root package.json) runs this via uvicorn.
+services:
+  - type: web
+    name: clique-backend
+    runtime: python
+    plan: free
+    buildCommand: pip install -r backend/requirements.txt
+    startCommand: sh -c "cd backend && uvicorn app:app --host 0.0.0.0 --port 10000"
+    envVars:
+      - key: DATABASE_URL
+        value: sqlite:///clique.db
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_MINUTES
+        value: "720"
+      - key: PLATFORM_ADMIN_USERNAME
+        value: clique-admin
+      - key: PLATFORM_ADMIN_PASSWORD
+        generateValue: true
+      - key: ALLOWED_ORIGINS
+        value: https://clique-for-schools.vercel.app

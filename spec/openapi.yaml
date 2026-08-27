@@ -1,0 +1,184 @@
+openapi: 3.1.0
+info:
+  # Do not change the title, if the title changes, the import paths will be broken
+  title: Api
+  version: 0.1.0
+  description: API specification
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: dashboard
+    description: Dashboard summaries
+  - name: students
+    description: Learner records
+  - name: academics
+    description: Classes, timetable, and assessment workflows
+  - name: communication
+    description: Notices and activity
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      description: Returns server health status
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+  /dashboard/summary:
+    get:
+      operationId: getDashboardSummary
+      tags: [dashboard]
+      summary: Get dashboard summary
+      responses:
+        "200":
+          description: Dashboard overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardSummary"
+  /students:
+    get:
+      operationId: getStudents
+      tags: [students]
+      summary: List students
+      responses:
+        "200":
+          description: Students
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Student"
+  /classes:
+    get:
+      operationId: getClasses
+      tags: [academics]
+      summary: List classes
+      responses:
+        "200":
+          description: Classes
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Class"
+  /schedule:
+    get:
+      operationId: getSchedule
+      tags: [academics]
+      summary: Get today's schedule
+      responses:
+        "200":
+          description: Schedule
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/ScheduleItem"
+  /notices:
+    get:
+      operationId: getNotices
+      tags: [communication]
+      summary: List school notices
+      responses:
+        "200":
+          description: Notices
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Notice"
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+    DashboardSummary:
+      type: object
+      required: [schoolName, academicYear, studentCount, classCount, attendanceRate, pendingReviews, upcomingEvents, performance]
+      properties:
+        schoolName: { type: string }
+        academicYear: { type: string }
+        studentCount: { type: number }
+        classCount: { type: number }
+        attendanceRate: { type: number }
+        pendingReviews: { type: number }
+        upcomingEvents:
+          type: array
+          items:
+            $ref: "#/components/schemas/UpcomingEvent"
+        performance:
+          type: array
+          items:
+            $ref: "#/components/schemas/PerformancePoint"
+    UpcomingEvent:
+      type: object
+      required: [id, title, date, type]
+      properties:
+        id: { type: number }
+        title: { type: string }
+        date: { type: string }
+        type: { type: string }
+    PerformancePoint:
+      type: object
+      required: [label, value]
+      properties:
+        label: { type: string }
+        value: { type: number }
+    Student:
+      type: object
+      required: [id, name, admissionNumber, className, status, average, attendance]
+      properties:
+        id: { type: number }
+        name: { type: string }
+        admissionNumber: { type: string }
+        className: { type: string }
+        status: { type: string }
+        average: { type: number }
+        attendance: { type: number }
+    Class:
+      type: object
+      required: [id, name, stream, studentCount, teacher, average]
+      properties:
+        id: { type: number }
+        name: { type: string }
+        stream: { type: string }
+        studentCount: { type: number }
+        teacher: { type: string }
+        average: { type: number }
+    ScheduleItem:
+      type: object
+      required: [id, time, subject, className, room, status]
+      properties:
+        id: { type: number }
+        time: { type: string }
+        subject: { type: string }
+        className: { type: string }
+        room: { type: string }
+        status: { type: string }
+    Notice:
+      type: object
+      required: [id, title, body, date, audience]
+      properties:
+        id: { type: number }
+        title: { type: string }
+        body: { type: string }
+        date: { type: string }
+        audience: { type: string }
+
