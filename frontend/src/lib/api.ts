@@ -85,3 +85,41 @@ export function apiRegister(payload: Record<string, unknown>): Promise<RegisterR
 export function apiMe(): Promise<{ username: string; role: string; name?: string | null; school?: unknown }> {
   return request('/me');
 }
+
+export interface PlatformSchool {
+  id: number;
+  name: string;
+  code: string;
+  district?: string | null;
+  head_teacher?: string | null;
+  email?: string | null;
+  contact_name?: string | null;
+  status: string;
+  plan?: string | null;
+  created_at?: string | null;
+  approved_at?: string | null;
+}
+
+export function apiPlatformSchools(): Promise<PlatformSchool[]> {
+  return request('/platform/schools');
+}
+
+export function apiApproveSchool(id: number): Promise<PlatformSchool> {
+  return request(`/platform/schools/${id}/approve`, { method: 'POST' });
+}
+
+export function apiDenySchool(id: number): Promise<PlatformSchool> {
+  return request(`/platform/schools/${id}/deny`, { method: 'POST' });
+}
+
+export function apiProvisionSchool(payload: {
+  school_name: string;
+  district?: string;
+  head_teacher?: string;
+  email?: string;
+  contact_name?: string;
+  admin_username: string;
+  admin_password: string;
+}): Promise<PlatformSchool> {
+  return request('/platform/schools/manual', { method: 'POST', body: JSON.stringify(payload) });
+}
