@@ -21,3 +21,4 @@ backend/test_clique.db
 .vscode/
 .idea/
 .DS_Store
+.vercel

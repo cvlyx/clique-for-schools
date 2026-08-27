@@ -1,8 +1,18 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "framework": "vite",
-  "rootDirectory": "frontend",
-  "buildCommand": "pnpm --filter @workspace/clique-for-schools build",
-  "outputDirectory": "dist",
-  "installCommand": "cd .. && pnpm install --frozen-lockfile || pnpm install"
+  "services": {
+    "frontend": {
+      "root": "frontend",
+      "framework": "vite",
+      "installCommand": "cd .. && pnpm install --frozen-lockfile || pnpm install",
+      "buildCommand": "pnpm --filter @workspace/clique-for-schools build",
+      "outputDirectory": "dist",
+      "rewrites": [
+        { "source": "/((?!assets/).*)", "destination": "/index.html" }
+      ]
+    }
+  },
+  "rewrites": [
+    { "source": "/(.*)", "destination": { "service": "frontend" } }
+  ]
 }
