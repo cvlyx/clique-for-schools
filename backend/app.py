@@ -1069,6 +1069,381 @@ def _log_activity(db: Session, actor: str, action: str, detail: str | None = Non
     db.add(ActivityLog(actor=actor, action=action, detail=detail, school_id=school_id))
 
 
+# ================= Platform admin: operate inside a school (full CRUD) =================
+# These let a platform admin view/manage any school's data directly — students,
+# grades, reports, classes, notices, settings — in addition to approving and
+# administering the school itself. All are guarded by require_platform_admin.
+
+
+def _platform_school(db: Session, school_id: int) -> School:
+    school = db.scalar(select(School).where(School.id == school_id))
+    if not school:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "School not found")
+    return school
+
+
+def _find_student(db: Session, school_id: int, student_id: str) -> Student:
+    student = db.scalar(
+        select(Student)
+        .where(Student.school_id == school_id)
+        .where(Student.student_id == student_id)
+    )
+    if not student:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Student not found in this school")
+    return student
+
+
+# --- students ---
+
+
+@app.get("/api/platform/schools/{school_id}/students")
+def platform_list_students(
+    school_id: int,
+    _: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    return _list_students(db, school_id)
+
+
+@app.post("/api/platform/schools/{school_id}/students", status_code=201)
+def platform_add_student(
+    school_id: int,
+    payload: StudentIn,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    student = _add_student(db, school_id, payload)
+    _log_activity(db, actor.username, "school.student_added", f"Added {student.name} at school {school_id}", school_id)
+    return {"student_id": student.student_id, "name": student.name, "student_class": student.student_class}
+
+
+@app.post("/api/platform/schools/{school_id}/students/bulk", status_code=201)
+def platform_add_students_bulk(
+    school_id: int,
+    payload: list[StudentIn],
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Quickly populate a school's register (e.g. when a school struggles to add learners)."""
+    _platform_school(db, school_id)
+    added: list[dict] = []
+    errors: list[dict] = []
+    for item in payload:
+        try:
+            st = _add_student(db, school_id, item)
+            added.append({"student_id": st.student_id, "name": st.name, "student_class": st.student_class})
+        except HTTPException as e:
+            errors.append({"name": item.name, "error": e.detail})
+            db.rollback()
+    _log_activity(db, actor.username, "school.students_bulk", f"Bulk-added {len(added)} students at school {school_id}", school_id)
+    db.commit()
+    return {"added": added, "errors": errors}
+
+
+@app.patch("/api/platform/schools/{school_id}/students/{student_id}")
+def platform_update_student(
+    school_id: int,
+    student_id: str,
+    payload: StudentIn,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    student = _find_student(db, school_id, student_id)
+    student.name = payload.name
+    student.student_class = payload.student_class.upper()
+    db.commit()
+    _log_activity(db, actor.username, "school.student_updated", f"Updated {student.name}", school_id)
+    return {"student_id": student.student_id, "name": student.name, "student_class": student.student_class}
+
+
+@app.delete("/api/platform/schools/{school_id}/students/{student_id}")
+def platform_delete_student(
+    school_id: int,
+    student_id: str,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    student = _find_student(db, school_id, student_id)
+    db.delete(student)
+    db.commit()
+    _log_activity(db, actor.username, "school.student_deleted", f"Deleted {student.name}", school_id)
+    return {"ok": True}
+
+
+# --- grades & reports ---
+
+
+@app.get("/api/platform/schools/{school_id}/grades")
+def platform_list_grades(
+    school_id: int,
+    _: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    rows = db.scalars(
+        select(GradeRecord).where(GradeRecord.school_id == school_id).order_by(GradeRecord.created_at.desc())
+    ).all()
+    return [
+        {
+            "subject": g.subject,
+            "student_id": g.student_id,
+            "student_name": g.student_name,
+            "student_class": g.student_class,
+            "score": g.score,
+            "grade": calc_grade_backend(g.score, g.student_class)["grade"],
+            "result": calc_grade_backend(g.score, g.student_class)["result"],
+            "teacher_comment": g.teacher_comment,
+            "term": g.term,
+            "academic_year": g.academic_year,
+        }
+        for g in rows
+    ]
+
+
+@app.post("/api/platform/schools/{school_id}/grades", status_code=201)
+def platform_add_grade(
+    school_id: int,
+    payload: GradeIn,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    _add_grade(db, school_id, payload)
+    db.commit()
+    _log_activity(db, actor.username, "school.grade_added", f"Grade for {payload.student_id} ({payload.subject})", school_id)
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/platform/schools/{school_id}/grades/{grade_id}")
+def platform_delete_grade(
+    school_id: int,
+    grade_id: int,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    grade = db.scalar(
+        select(GradeRecord).where(GradeRecord.id == grade_id).where(GradeRecord.school_id == school_id)
+    )
+    if not grade:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Grade not found")
+    db.delete(grade)
+    db.commit()
+    _log_activity(db, actor.username, "school.grade_deleted", f"Deleted grade {grade.subject}", school_id)
+    return {"ok": True}
+
+
+@app.get("/api/platform/schools/{school_id}/reports")
+def platform_reports(
+    school_id: int,
+    _: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    reports = db.scalars(
+        select(SchoolReport)
+        .where(SchoolReport.school_id == school_id)
+        .order_by(SchoolReport.academic_year.desc(), SchoolReport.updated_at.desc())
+    ).all()
+    return [
+        {
+            "id": r.id,
+            "student_id": r.student_id,
+            "student_name": r.student_name,
+            "student_class": r.student_class,
+            "term": r.term,
+            "academic_year": r.academic_year,
+            "total_subjects": r.total_subjects,
+            "average_score": r.average_score,
+            "aggregate_points": r.aggregate_points,
+            "position": r.position,
+            "updated_at": r.updated_at.isoformat(),
+        }
+        for r in reports
+    ]
+
+
+@app.get("/api/platform/schools/{school_id}/reports/{report_id}")
+def platform_report_detail(
+    school_id: int,
+    report_id: int,
+    _: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    report = db.scalar(
+        select(SchoolReport)
+        .where(SchoolReport.id == report_id)
+        .where(SchoolReport.school_id == school_id)
+    )
+    if not report:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Report not found")
+    return {
+        "id": report.id,
+        "student_id": report.student_id,
+        "student_name": report.student_name,
+        "student_class": report.student_class,
+        "term": report.term,
+        "academic_year": report.academic_year,
+        "report_data": json.loads(report.report_data or "{}"),
+    }
+
+
+# --- classes ---
+
+
+@app.get("/api/platform/schools/{school_id}/classes")
+def platform_list_classes(
+    school_id: int,
+    _: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    return _classes(db, school_id)
+
+
+@app.post("/api/platform/schools/{school_id}/classes", status_code=201)
+def platform_add_class(
+    school_id: int,
+    payload: dict,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    name = (payload or {}).get("name", "").strip() or None
+    stream = (payload or {}).get("stream", "") or ""
+    teacher = (payload or {}).get("teacher") or None
+    if not name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "name is required")
+    c = SchoolClass(school_id=school_id, name=name, stream=stream, teacher=teacher)
+    db.add(c)
+    db.commit()
+    db.refresh(c)
+    _log_activity(db, actor.username, "school.class_added", f"Added class {name}", school_id)
+    return {"id": c.id, "name": c.name, "stream": c.stream, "teacher": c.teacher}
+
+
+@app.patch("/api/platform/schools/{school_id}/classes/{class_id}")
+def platform_update_class(
+    school_id: int,
+    class_id: int,
+    payload: dict,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    c = db.scalar(
+        select(SchoolClass).where(SchoolClass.id == class_id).where(SchoolClass.school_id == school_id)
+    )
+    if not c:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Class not found")
+    data = payload or {}
+    if data.get("name"):
+        c.name = data["name"]
+    if "stream" in data:
+        c.stream = data["stream"] or ""
+    if "teacher" in data:
+        c.teacher = data["teacher"] or None
+    db.commit()
+    _log_activity(db, actor.username, "school.class_updated", f"Updated class {c.name}", school_id)
+    return {"id": c.id, "name": c.name, "stream": c.stream, "teacher": c.teacher}
+
+
+@app.delete("/api/platform/schools/{school_id}/classes/{class_id}")
+def platform_delete_class(
+    school_id: int,
+    class_id: int,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    c = db.scalar(
+        select(SchoolClass).where(SchoolClass.id == class_id).where(SchoolClass.school_id == school_id)
+    )
+    if not c:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Class not found")
+    db.delete(c)
+    db.commit()
+    _log_activity(db, actor.username, "school.class_deleted", f"Deleted class {c.name}", school_id)
+    return {"ok": True}
+
+
+# --- notices ---
+
+
+@app.get("/api/platform/schools/{school_id}/notices")
+def platform_list_notices(
+    school_id: int,
+    _: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    return _school_notices(db, school_id)
+
+
+@app.post("/api/platform/schools/{school_id}/notices", status_code=201)
+def platform_post_notice(
+    school_id: int,
+    payload: NoticeIn,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    n = _create_notice(db, school_id, payload)
+    _log_activity(db, actor.username, "school.notice_posted", f"Notice '{n['title']}' at school {school_id}", school_id)
+    return n
+
+
+@app.delete("/api/platform/schools/{school_id}/notices/{notice_id}")
+def platform_delete_notice(
+    school_id: int,
+    notice_id: int,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    n = db.scalar(
+        select(Notice).where(Notice.id == notice_id).where(Notice.school_id == school_id)
+    )
+    if not n:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Notice not found")
+    db.delete(n)
+    db.commit()
+    _log_activity(db, actor.username, "school.notice_deleted", f"Deleted notice '{n.title}'", school_id)
+    return {"ok": True}
+
+
+# --- settings ---
+
+
+@app.get("/api/platform/schools/{school_id}/settings")
+def platform_school_settings(
+    school_id: int,
+    _: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    return _read_settings(db, school_id)
+
+
+@app.put("/api/platform/schools/{school_id}/settings", response_model=SettingsOut)
+def platform_save_settings(
+    school_id: int,
+    payload: SettingsIn,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _platform_school(db, school_id)
+    result = _save_settings(db, school_id, payload)
+    _log_activity(db, actor.username, "school.settings_updated", f"Updated settings at school {school_id}", school_id)
+    return result
+
+
 # ================= School: Clique API surface =================
 
 
@@ -1129,13 +1504,7 @@ def dashboard_summary(
     }
 
 
-@app.get("/api/students")
-def list_students(
-    user: Annotated[User, Depends(require_school_user)],
-    db: Annotated[Session, Depends(get_db)],
-):
-    _school_ok(db, user.school_id)
-    sid = user.school_id
+def _list_students(db: Session, sid: int):
     students = db.scalars(
         select(Student).where(Student.school_id == sid).order_by(Student.created_at.desc())
     ).all()
@@ -1161,13 +1530,16 @@ def list_students(
     return out
 
 
-@app.get("/api/classes")
-def list_classes(
+@app.get("/api/students")
+def list_students(
     user: Annotated[User, Depends(require_school_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
     _school_ok(db, user.school_id)
-    sid = user.school_id
+    return _list_students(db, user.school_id)
+
+
+def _classes(db: Session, sid: int):
     class_rows = db.scalars(
         select(SchoolClass).where(SchoolClass.school_id == sid)
     ).all()
@@ -1208,6 +1580,15 @@ def list_classes(
     return out
 
 
+@app.get("/api/classes")
+def list_classes(
+    user: Annotated[User, Depends(require_school_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _school_ok(db, user.school_id)
+    return _classes(db, user.school_id)
+
+
 def students_in_class(students: list, c: SchoolClass) -> int:
     return sum(1 for s in students if s.student_class == c.name.upper())
 
@@ -1243,16 +1624,9 @@ def get_schedule(
     return out
 
 
-@app.get("/api/notices")
-def list_notices(
-    user: Annotated[User, Depends(require_school_user)],
-    db: Annotated[Session, Depends(get_db)],
-):
-    _school_ok(db, user.school_id)
+def _school_notices(db: Session, sid: int):
     rows = db.scalars(
-        select(Notice)
-        .where(Notice.school_id == user.school_id)
-        .order_by(Notice.date.desc())
+        select(Notice).where(Notice.school_id == sid).order_by(Notice.date.desc())
     ).all()
     return [
         {
@@ -1266,15 +1640,9 @@ def list_notices(
     ]
 
 
-@app.post("/api/notices", status_code=201)
-def create_notice(
-    payload: NoticeIn,
-    user: Annotated[User, Depends(require_school_user)],
-    db: Annotated[Session, Depends(get_db)],
-):
-    _school_ok(db, user.school_id)
+def _create_notice(db: Session, sid: int, payload: NoticeIn):
     n = Notice(
-        school_id=user.school_id,
+        school_id=sid,
         title=payload.title,
         body=payload.body,
         audience=payload.audience,
@@ -1291,27 +1659,40 @@ def create_notice(
     }
 
 
-# ================= School: management (students/grades/settings/logo) =================
-
-
-@app.post("/api/students", status_code=201)
-def add_student(
-    payload: StudentIn,
+@app.get("/api/notices")
+def list_notices(
     user: Annotated[User, Depends(require_school_user)],
     db: Annotated[Session, Depends(get_db)],
 ):
     _school_ok(db, user.school_id)
-    sid = payload.admission_number or gen_student_id(db, user.school_id, payload.student_class)
+    return _school_notices(db, user.school_id)
+
+
+@app.post("/api/notices", status_code=201)
+def create_notice(
+    payload: NoticeIn,
+    user: Annotated[User, Depends(require_school_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _school_ok(db, user.school_id)
+    return _create_notice(db, user.school_id, payload)
+
+
+# ================= School: management (students/grades/settings/logo) =================
+
+
+def _add_student(db: Session, school_id: int, payload: StudentIn) -> Student:
+    sid = payload.admission_number or gen_student_id(db, school_id, payload.student_class)
     existing = db.scalar(
         select(Student)
-        .where(Student.school_id == user.school_id)
+        .where(Student.school_id == school_id)
         .where(Student.student_id == sid)
     )
     if existing:
         raise HTTPException(status.HTTP_409_CONFLICT, "A student with that admission number exists")
     student = Student(
         student_id=sid,
-        school_id=user.school_id,
+        school_id=school_id,
         name=payload.name,
         student_class=payload.student_class.upper(),
     )
@@ -1322,6 +1703,17 @@ def add_student(
         db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "Student already exists in this class")
     db.refresh(student)
+    return student
+
+
+@app.post("/api/students", status_code=201)
+def add_student(
+    payload: StudentIn,
+    user: Annotated[User, Depends(require_school_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _school_ok(db, user.school_id)
+    student = _add_student(db, user.school_id, payload)
     return {"student_id": student.student_id, "name": student.name, "student_class": student.student_class}
 
 
@@ -1333,25 +1725,17 @@ def gen_student_id(db: Session, school_id: int, student_class: str) -> str:
     return f"{prefix}-{count + 1:04d}"
 
 
-@app.post("/api/grades", status_code=201)
-def add_grade(
-    payload: GradeIn,
-    user: Annotated[User, Depends(require_school_user)],
-    db: Annotated[Session, Depends(get_db)],
-):
-    _school_ok(db, user.school_id)
+def _add_grade(db: Session, school_id: int, payload: GradeIn) -> None:
     student = db.scalar(
-        select(Student)
-        .where(Student.school_id == user.school_id)
-        .where(Student.student_id == payload.student_id)
+        select(Student).where(Student.school_id == school_id).where(Student.student_id == payload.student_id)
     )
     if not student:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Student not found in your school")
-    term = payload.term or _current_term(db, user.school_id)[0]
-    year = payload.academic_year or _current_term(db, user.school_id)[1]
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Student not found in this school")
+    term = payload.term or _current_term(db, school_id)[0]
+    year = payload.academic_year or _current_term(db, school_id)[1]
     existing = db.scalar(
         select(GradeRecord)
-        .where(GradeRecord.school_id == user.school_id)
+        .where(GradeRecord.school_id == school_id)
         .where(GradeRecord.student_id == student.student_id)
         .where(GradeRecord.term == term)
         .where(GradeRecord.academic_year == year)
@@ -1363,7 +1747,7 @@ def add_grade(
     else:
         db.add(
             GradeRecord(
-                school_id=user.school_id,
+                school_id=school_id,
                 student_id=student.student_id,
                 student_name=student.name,
                 student_class=student.student_class,
@@ -1374,8 +1758,18 @@ def add_grade(
                 teacher_comment=payload.teacher_comment,
             )
         )
-    db.commit()
-    _sync_report(db, user.school_id, student, term, year)
+    db.flush()
+    _sync_report(db, school_id, student, term, year)
+
+
+@app.post("/api/grades", status_code=201)
+def add_grade(
+    payload: GradeIn,
+    user: Annotated[User, Depends(require_school_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    _school_ok(db, user.school_id)
+    _add_grade(db, user.school_id, payload)
     db.commit()
     return {"ok": True}
 
@@ -1398,6 +1792,22 @@ def school_settings(
     return _read_settings(db, user.school_id)
 
 
+def _save_settings(db: Session, school_id: int, payload: SettingsIn) -> SettingsOut:
+    data = payload.model_dump(exclude_none=True)
+    for key, val in data.items():
+        row = db.scalar(
+            select(AppSetting)
+            .where(AppSetting.school_id == school_id)
+            .where(AppSetting.key == key)
+        )
+        if row:
+            row.value = str(val)
+        else:
+            db.add(AppSetting(school_id=school_id, key=key, value=str(val)))
+    db.commit()
+    return _read_settings(db, school_id)
+
+
 @app.post("/api/settings", response_model=SettingsOut)
 def save_settings(
     payload: SettingsIn,
@@ -1405,19 +1815,7 @@ def save_settings(
     db: Annotated[Session, Depends(get_db)],
 ):
     _school_ok(db, user.school_id)
-    data = payload.model_dump(exclude_none=True)
-    for key, val in data.items():
-        row = db.scalar(
-            select(AppSetting)
-            .where(AppSetting.school_id == user.school_id)
-            .where(AppSetting.key == key)
-        )
-        if row:
-            row.value = str(val)
-        else:
-            db.add(AppSetting(school_id=user.school_id, key=key, value=str(val)))
-    db.commit()
-    return _read_settings(db, user.school_id)
+    return _save_settings(db, user.school_id, payload)
 
 
 @app.get("/api/logo")

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'wouter';
 import {
   Activity,
   BadgeCheck,
@@ -10,6 +11,7 @@ import {
   Edit3,
   KeyRound,
   LayoutDashboard,
+  ListChecks,
   Lock,
   Pause,
   Play,
@@ -536,6 +538,9 @@ function SchoolDetailModal({
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            <Link href={`/platform/schools/${id}/manage`}>
+              <Button size="sm" className="mb-1"><ListChecks size={15} /> Manage school</Button>
+            </Link>
             <Button size="sm" variant="outline" onClick={() => { setEditMode((v) => !v); setPlanMode(false); setPwMode(false); }}>
               <Edit3 size={15} /> Edit
             </Button>

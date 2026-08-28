@@ -242,3 +242,138 @@ export function apiDeletePlatformNotification(id: number): Promise<{ ok: boolean
 export function apiPlatformActivity(): Promise<PlatformActivityItem[]> {
   return request('/platform/activity');
 }
+
+// ----- School data CRUD (platform admin operating inside any school) -----
+
+export interface ManagedStudent {
+  id: number;
+  name: string;
+  admissionNumber: string;
+  className: string;
+  status: string;
+  average: number;
+}
+
+export interface ManagedGrade {
+  subject: string;
+  student_id: string;
+  student_name: string;
+  student_class: string;
+  score: number;
+  grade: string;
+  result: string;
+  teacher_comment?: string | null;
+  term: string;
+  academic_year: string;
+}
+
+export interface ManagedReport {
+  id: number;
+  student_id: string;
+  student_name: string;
+  student_class: string;
+  term: string;
+  academic_year: string;
+  total_subjects: number;
+  average_score: number;
+  aggregate_points: number;
+  position?: number | null;
+  updated_at: string;
+}
+
+export interface ManagedClass {
+  id: number;
+  name: string;
+  stream: string;
+  studentCount: number;
+  teacher: string;
+  average: number;
+}
+
+export interface ManagedNotice {
+  id: number;
+  title: string;
+  body: string;
+  date: string;
+  audience: string;
+}
+
+export interface ManagedSettings {
+  school_name?: string | null;
+  academic_year?: string | null;
+  report_title?: string | null;
+}
+
+const sd = (schoolId: number) => `/platform/schools/${schoolId}`;
+
+export function apiSchoolStudents(schoolId: number): Promise<ManagedStudent[]> {
+  return request(`${sd(schoolId)}/students`);
+}
+
+export function apiSchoolAddStudent(schoolId: number, payload: { name: string; student_class: string; admission_number?: string }): Promise<{ student_id: string; name: string; student_class: string }> {
+  return request(`${sd(schoolId)}/students`, { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export function apiSchoolBulkAddStudents(schoolId: number, students: { name: string; student_class: string; admission_number?: string }[]): Promise<{ added: { student_id: string; name: string; student_class: string }[]; errors: { name: string; error: string }[] }> {
+  return request(`${sd(schoolId)}/students/bulk`, { method: 'POST', body: JSON.stringify(students) });
+}
+
+export function apiSchoolUpdateStudent(schoolId: number, studentId: string, payload: { name: string; student_class: string }): Promise<{ student_id: string; name: string; student_class: string }> {
+  return request(`${sd(schoolId)}/students/${encodeURIComponent(studentId)}`, { method: 'PATCH', body: JSON.stringify(payload) });
+}
+
+export function apiSchoolDeleteStudent(schoolId: number, studentId: string): Promise<{ ok: boolean }> {
+  return request(`${sd(schoolId)}/students/${encodeURIComponent(studentId)}`, { method: 'DELETE' });
+}
+
+export function apiSchoolGrades(schoolId: number): Promise<ManagedGrade[]> {
+  return request(`${sd(schoolId)}/grades`);
+}
+
+export function apiSchoolAddGrade(schoolId: number, payload: { student_id: string; subject: string; score: number; term?: string; academic_year?: string; teacher_comment?: string }): Promise<{ ok: boolean }> {
+  return request(`${sd(schoolId)}/grades`, { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export function apiSchoolReports(schoolId: number): Promise<ManagedReport[]> {
+  return request(`${sd(schoolId)}/reports`);
+}
+
+export function apiSchoolReportDetail(schoolId: number, reportId: number): Promise<{ id: number; student_name: string; student_class: string; term: string; academic_year: string; report_data: any }> {
+  return request(`${sd(schoolId)}/reports/${reportId}`);
+}
+
+export function apiSchoolClasses(schoolId: number): Promise<ManagedClass[]> {
+  return request(`${sd(schoolId)}/classes`);
+}
+
+export function apiSchoolAddClass(schoolId: number, payload: { name: string; stream?: string; teacher?: string }): Promise<{ id: number; name: string; stream: string; teacher: string | null }> {
+  return request(`${sd(schoolId)}/classes`, { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export function apiSchoolUpdateClass(schoolId: number, classId: number, payload: { name?: string; stream?: string; teacher?: string }): Promise<{ id: number; name: string; stream: string; teacher: string | null }> {
+  return request(`${sd(schoolId)}/classes/${classId}`, { method: 'PATCH', body: JSON.stringify(payload) });
+}
+
+export function apiSchoolDeleteClass(schoolId: number, classId: number): Promise<{ ok: boolean }> {
+  return request(`${sd(schoolId)}/classes/${classId}`, { method: 'DELETE' });
+}
+
+export function apiSchoolNotices(schoolId: number): Promise<ManagedNotice[]> {
+  return request(`${sd(schoolId)}/notices`);
+}
+
+export function apiSchoolAddNotice(schoolId: number, payload: { title: string; body: string; audience?: string }): Promise<ManagedNotice> {
+  return request(`${sd(schoolId)}/notices`, { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export function apiSchoolDeleteNotice(schoolId: number, noticeId: number): Promise<{ ok: boolean }> {
+  return request(`${sd(schoolId)}/notices/${noticeId}`, { method: 'DELETE' });
+}
+
+export function apiSchoolSettings(schoolId: number): Promise<ManagedSettings> {
+  return request(`${sd(schoolId)}/settings`);
+}
+
+export function apiSchoolSaveSettings(schoolId: number, payload: Partial<ManagedSettings>): Promise<ManagedSettings> {
+  return request(`${sd(schoolId)}/settings`, { method: 'PUT', body: JSON.stringify(payload) });
+}
