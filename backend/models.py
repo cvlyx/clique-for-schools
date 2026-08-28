@@ -38,6 +38,8 @@ class School(Base):
     # provisional -> active (approved) | rejected | suspended
     status: Mapped[str] = mapped_column(String(24), default="provisional", index=True)
     plan: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    billing_status: Mapped[str] = mapped_column(String(24), default="free")
+    plan_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     contact_name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
     approved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
@@ -180,3 +182,29 @@ class Notice(Base):
     body: Mapped[str] = mapped_column(Text())
     audience: Mapped[str | None] = mapped_column(String(64), default="All staff")
     date: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class ActivityLog(Base):
+    """Audit / activity trail for platform-level actions."""
+
+    __tablename__ = "activity_log"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    actor: Mapped[str] = mapped_column(String(64), index=True)
+    action: Mapped[str] = mapped_column(String(64), index=True)
+    detail: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    school_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)
+
+
+class PlatformNotice(Base):
+    """Notices the platform sends to one or all schools."""
+
+    __tablename__ = "platform_notices"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[str] = mapped_column(String(200))
+    body: Mapped[str] = mapped_column(Text())
+    audience: Mapped[str] = mapped_column(String(24), default="all")
+    school_id: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow, index=True)

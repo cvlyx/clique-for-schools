@@ -22,9 +22,11 @@ from sqlalchemy.orm import Session
 
 from db import SessionLocal, init_db
 from models import (
+    ActivityLog,
     AppSetting,
     GradeRecord,
     Notice,
+    PlatformNotice,
     School,
     SchoolAsset,
     SchoolClass,
@@ -232,6 +234,49 @@ class NoticeIn(BaseModel):
     title: str = Field(..., min_length=1, max_length=200)
     body: str = Field(..., min_length=1)
     audience: str | None = Field(default=None, max_length=64)
+
+
+# ----- Platform admin: extended models -----
+
+
+class SchoolEditIn(BaseModel):
+    name: str | None = Field(default=None, min_length=2, max_length=200)
+    district: str | None = Field(default=None, max_length=120)
+    head_teacher: str | None = Field(default=None, max_length=120)
+    email: str | None = Field(default=None, max_length=200)
+    phone: str | None = Field(default=None, max_length=64)
+    contact_name: str | None = Field(default=None, max_length=120)
+
+
+class PlanIn(BaseModel):
+    plan: str = Field(..., min_length=1, max_length=64)
+    billing_status: str | None = Field(default=None, max_length=24)
+
+
+class ResetPasswordIn(BaseModel):
+    new_password: str = Field(..., min_length=6, max_length=128)
+
+
+class PlatformAdminCreateIn(BaseModel):
+    username: str = Field(..., min_length=3, max_length=64)
+    password: str = Field(..., min_length=6, max_length=128)
+    name: str | None = Field(default=None, max_length=120)
+
+
+class PlatformNoticeIn(BaseModel):
+    title: str = Field(..., min_length=1, max_length=200)
+    body: str = Field(..., min_length=1)
+    audience: str | None = Field(default=None, max_length=24)
+    school_id: int | None = Field(default=None)
+
+
+class SchoolDetailOut(SchoolOut):
+    admin: dict | None = None
+    student_count: int = 0
+    class_count: int = 0
+    report_count: int = 0
+    billing_status: str | None = None
+    plan_updated_at: datetime | None = None
 
 
 # ----- Auth dependencies -----
@@ -496,7 +541,7 @@ def platform_schools(
 @app.post("/api/platform/schools/{school_id}/approve", response_model=SchoolOut)
 def approve_school(
     school_id: int,
-    _: Annotated[User, Depends(require_platform_admin)],
+    actor: Annotated[User, Depends(require_platform_admin)],
     db: Annotated[Session, Depends(get_db)],
 ):
     school = db.scalar(select(School).where(School.id == school_id))
@@ -505,6 +550,7 @@ def approve_school(
     school.status = "active"
     school.approved_at = datetime.now(timezone.utc)
     _seed_school_defaults(db, school_id)
+    _log_activity(db, actor.username, "school.approved", f"Approved {school.name}", school.id)
     db.commit()
     db.refresh(school)
     return _school_out(school)
@@ -513,13 +559,14 @@ def approve_school(
 @app.post("/api/platform/schools/{school_id}/deny", response_model=SchoolOut)
 def deny_school(
     school_id: int,
-    _: Annotated[User, Depends(require_platform_admin)],
+    actor: Annotated[User, Depends(require_platform_admin)],
     db: Annotated[Session, Depends(get_db)],
 ):
     school = db.scalar(select(School).where(School.id == school_id))
     if not school:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "School not found")
     school.status = "rejected"
+    _log_activity(db, actor.username, "school.rejected", f"Rejected {school.name}", school.id)
     db.commit()
     db.refresh(school)
     return _school_out(school)
@@ -567,6 +614,377 @@ def manual_create_school(
     return _school_out(school)
 
 
+@app.get("/api/platform/stats")
+def platform_stats(
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Overview counts for the platform dashboard."""
+    total = db.scalar(select(func.count()).select_from(School)) or 0
+    provisional = db.scalar(
+        select(func.count()).select_from(School).where(School.status == "provisional")
+    ) or 0
+    active = db.scalar(
+        select(func.count()).select_from(School).where(School.status == "active")
+    ) or 0
+    rejected = db.scalar(
+        select(func.count()).select_from(School).where(School.status == "rejected")
+    ) or 0
+    suspended = db.scalar(
+        select(func.count()).select_from(School).where(School.status == "suspended")
+    ) or 0
+    students = db.scalar(select(func.count()).select_from(Student)) or 0
+    reports = db.scalar(select(func.count()).select_from(SchoolReport)) or 0
+    admins = db.scalar(
+        select(func.count())
+        .select_from(User)
+        .where(User.role == "platform_admin")
+    ) or 0
+
+    by_plan: dict[str, int] = {}
+    for plan, cnt in db.execute(
+        select(School.plan, func.count()).where(
+            School.plan.isnot(None), School.plan != ""
+        ).group_by(School.plan)
+    ).all():
+        by_plan[plan or "None"] = cnt
+
+    recent = db.scalars(
+        select(School).order_by(School.created_at.desc()).limit(6)
+    ).all()
+
+    return {
+        "total": total,
+        "provisional": provisional,
+        "active": active,
+        "rejected": rejected,
+        "suspended": suspended,
+        "students": students,
+        "reports": reports,
+        "platformAdmins": admins,
+        "byPlan": by_plan,
+        "recentSchools": [
+            {
+                "id": s.id,
+                "name": s.name,
+                "code": s.code,
+                "status": s.status,
+                "plan": s.plan,
+                "district": s.district,
+                "created_at": s.created_at.isoformat(),
+            }
+            for s in recent
+        ],
+    }
+
+
+@app.get("/api/platform/schools/{school_id}", response_model=SchoolDetailOut)
+def platform_school_detail(
+    school_id: int,
+    _: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    school = db.scalar(select(School).where(School.id == school_id))
+    if not school:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "School not found")
+    return _school_detail(db, school)
+
+
+@app.post("/api/platform/schools/{school_id}/suspend", response_model=SchoolOut)
+def suspend_school(
+    school_id: int,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    school = db.scalar(select(School).where(School.id == school_id))
+    if not school:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "School not found")
+    school.status = "suspended"
+    _log_activity(db, actor.username, "school.suspended", f"Suspended {school.name}", school.id)
+    db.commit()
+    db.refresh(school)
+    return _school_out(school)
+
+
+@app.post("/api/platform/schools/{school_id}/resume", response_model=SchoolOut)
+def resume_school(
+    school_id: int,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    school = db.scalar(select(School).where(School.id == school_id))
+    if not school:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "School not found")
+    if school.status == "suspended":
+        school.status = "active"
+    elif school.status == "rejected":
+        school.status = "active"
+        if not school.approved_at:
+            school.approved_at = datetime.now(timezone.utc)
+        _seed_school_defaults(db, school_id)
+    _log_activity(db, actor.username, "school.resumed", f"Resumed {school.name}", school.id)
+    db.commit()
+    db.refresh(school)
+    return _school_out(school)
+
+
+@app.post("/api/platform/schools/{school_id}/reactivate", response_model=SchoolOut)
+def reactivate_school(
+    school_id: int,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    """Reactivate a previously rejected school."""
+    school = db.scalar(select(School).where(School.id == school_id))
+    if not school:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "School not found")
+    school.status = "active"
+    school.approved_at = school.approved_at or datetime.now(timezone.utc)
+    _seed_school_defaults(db, school_id)
+    _log_activity(db, actor.username, "school.reactivated", f"Reactivated {school.name}", school.id)
+    db.commit()
+    db.refresh(school)
+    return _school_out(school)
+
+
+@app.delete("/api/platform/schools/{school_id}")
+def delete_school(
+    school_id: int,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    school = db.scalar(select(School).where(School.id == school_id))
+    if not school:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "School not found")
+    db.delete(
+        school  # cascade deletes users/students/grades/reports via FK ondelete
+    )
+    _log_activity(db, actor.username, "school.deleted", f"Deleted {school.name}")
+    db.commit()
+    return {"ok": True}
+
+
+@app.patch("/api/platform/schools/{school_id}", response_model=SchoolOut)
+def edit_school(
+    school_id: int,
+    payload: SchoolEditIn,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    school = db.scalar(select(School).where(School.id == school_id))
+    if not school:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "School not found")
+    for field in ("name", "district", "head_teacher", "email", "phone", "contact_name"):
+        val = getattr(payload, field)
+        if val is not None:
+            setattr(school, field, val)
+    _log_activity(db, actor.username, "school.edited", f"Edited {school.name}", school.id)
+    db.commit()
+    db.refresh(school)
+    return _school_out(school)
+
+
+@app.put("/api/platform/schools/{school_id}/plan", response_model=SchoolOut)
+def update_school_plan(
+    school_id: int,
+    payload: PlanIn,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    school = db.scalar(select(School).where(School.id == school_id))
+    if not school:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "School not found")
+    school.plan = payload.plan
+    if payload.billing_status is not None:
+        school.billing_status = payload.billing_status
+    school.plan_updated_at = datetime.now(timezone.utc)
+    _log_activity(
+        db, actor.username, "school.plan",
+        f"{school.name} -> {payload.plan} ({school.billing_status})", school.id,
+    )
+    db.commit()
+    db.refresh(school)
+    return _school_out(school)
+
+
+@app.post("/api/platform/schools/{school_id}/reset-password", response_model=SchoolOut)
+def reset_school_password(
+    school_id: int,
+    payload: ResetPasswordIn,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    school = db.scalar(select(School).where(School.id == school_id))
+    if not school:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "School not found")
+    admin = db.scalar(
+        select(User).where(User.school_id == school_id).where(User.role == "admin")
+    )
+    if not admin:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No admin account for this school")
+    admin.password_hash = _hash_password(payload.new_password)
+    _log_activity(db, actor.username, "school.password_reset", f"Reset password for {school.name}", school.id)
+    db.commit()
+    return _school_out(school)
+
+
+# ================= Platform admin: user management =================
+
+
+@app.get("/api/platform/admins")
+def platform_admins(
+    _: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    rows = db.scalars(
+        select(User)
+        .where(User.role == "platform_admin")
+        .order_by(User.created_at.asc())
+    ).all()
+    return [
+        {
+            "id": u.id,
+            "username": u.username,
+            "name": u.name,
+            "is_active": u.is_active,
+            "created_at": u.created_at.isoformat(),
+        }
+        for u in rows
+    ]
+
+
+@app.post("/api/platform/admins", status_code=201)
+def create_platform_admin(
+    payload: PlatformAdminCreateIn,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    existing = db.scalar(select(User).where(User.username == payload.username))
+    if existing:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Username already taken")
+    db.add(
+        User(
+            school_id=None,
+            username=payload.username,
+            password_hash=_hash_password(payload.password),
+            role="platform_admin",
+            name=payload.name,
+            is_active=True,
+        )
+    )
+    _log_activity(db, actor.username, "admin.created", f"Created admin {payload.username}")
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, "Username already taken")
+    return {"ok": True}
+
+
+@app.post("/api/platform/admins/{admin_id}/toggle")
+def toggle_platform_admin(
+    admin_id: int,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    admin = db.scalar(
+        select(User).where(User.id == admin_id).where(User.role == "platform_admin")
+    )
+    if not admin:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Admin not found")
+    if admin.username == actor.username:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "You cannot disable your own account")
+    admin.is_active = not admin.is_active
+    _log_activity(db, actor.username, "admin.toggled", f"{'Disabled' if not admin.is_active else 'Enabled'} {admin.username}")
+    db.commit()
+    return {"ok": True, "is_active": admin.is_active}
+
+
+# ================= Platform admin: notifications & activity =================
+
+
+@app.get("/api/platform/notifications")
+def platform_notifications(
+    _: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    rows = db.scalars(
+        select(PlatformNotice).order_by(PlatformNotice.created_at.desc()).limit(50)
+    ).all()
+    return [
+        {
+            "id": n.id,
+            "title": n.title,
+            "body": n.body,
+            "audience": n.audience,
+            "school_id": n.school_id,
+            "created_at": n.created_at.isoformat(),
+        }
+        for n in rows
+    ]
+
+
+@app.post("/api/platform/notifications", status_code=201)
+def create_platform_notification(
+    payload: PlatformNoticeIn,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    school_id = None
+    if payload.school_id:
+        school = db.scalar(select(School).where(School.id == payload.school_id))
+        if not school:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "School not found")
+        school_id = school.id
+    db.add(
+        PlatformNotice(
+            title=payload.title,
+            body=payload.body,
+            audience=payload.audience or "all",
+            school_id=school_id,
+        )
+    )
+    _log_activity(db, actor.username, "notification.created", f"{payload.title}")
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/platform/notifications/{notice_id}")
+def delete_platform_notification(
+    notice_id: int,
+    actor: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    notice = db.scalar(select(PlatformNotice).where(PlatformNotice.id == notice_id))
+    if not notice:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Notice not found")
+    db.delete(notice)
+    _log_activity(db, actor.username, "notification.deleted", f"{notice.title}")
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/platform/activity")
+def platform_activity(
+    _: Annotated[User, Depends(require_platform_admin)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    rows = db.scalars(
+        select(ActivityLog).order_by(ActivityLog.created_at.desc()).limit(100)
+    ).all()
+    return [
+        {
+            "id": a.id,
+            "actor": a.actor,
+            "action": a.action,
+            "detail": a.detail,
+            "school_id": a.school_id,
+            "created_at": a.created_at.isoformat(),
+        }
+        for a in rows
+    ]
+
+
 def _seed_school_defaults(db: Session, school_id: int) -> None:
     """Idempotently seed default timetable classes and settings for a school."""
     existing = db.scalars(select(SchoolClass).where(SchoolClass.school_id == school_id)).first()
@@ -603,6 +1021,52 @@ def _school_out(s: School) -> SchoolOut:
         created_at=s.created_at,
         approved_at=s.approved_at,
     )
+
+
+def _school_detail(db: Session, s: School) -> SchoolDetailOut:
+    admin = db.scalar(
+        select(User).where(User.school_id == s.id).where(User.role == "admin")
+    )
+    return SchoolDetailOut(
+        id=s.id,
+        name=s.name,
+        code=s.code,
+        district=s.district,
+        head_teacher=s.head_teacher,
+        email=s.email,
+        phone=s.phone,
+        contact_name=s.contact_name,
+        status=s.status,
+        plan=s.plan,
+        created_at=s.created_at,
+        approved_at=s.approved_at,
+        billing_status=s.billing_status,
+        plan_updated_at=s.plan_updated_at,
+        admin={
+            "id": admin.id,
+            "username": admin.username,
+            "name": admin.name,
+            "is_active": admin.is_active,
+        }
+        if admin
+        else None,
+        student_count=db.scalar(
+            select(func.count()).select_from(Student).where(Student.school_id == s.id)
+        )
+        or 0,
+        class_count=db.scalar(
+            select(func.count()).select_from(SchoolClass).where(SchoolClass.school_id == s.id)
+        )
+        or 0,
+        report_count=db.scalar(
+            select(func.count()).select_from(SchoolReport).where(SchoolReport.school_id == s.id)
+        )
+        or 0,
+    )
+
+
+def _log_activity(db: Session, actor: str, action: str, detail: str | None = None, school_id: int | None = None) -> None:
+    db.add(ActivityLog(actor=actor, action=action, detail=detail, school_id=school_id))
 
 
 # ================= School: Clique API surface =================

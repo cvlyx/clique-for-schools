@@ -93,6 +93,7 @@ export interface PlatformSchool {
   district?: string | null;
   head_teacher?: string | null;
   email?: string | null;
+  phone?: string | null;
   contact_name?: string | null;
   status: string;
   plan?: string | null;
@@ -122,4 +123,122 @@ export function apiProvisionSchool(payload: {
   admin_password: string;
 }): Promise<PlatformSchool> {
   return request('/platform/schools/manual', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export interface PlatformSchoolDetail extends PlatformSchool {
+  billing_status?: string | null;
+  plan_updated_at?: string | null;
+  admin?: { id: number; username: string; name?: string | null; is_active: boolean } | null;
+  student_count?: number;
+  class_count?: number;
+  report_count?: number;
+}
+
+export interface PlatformStats {
+  total: number;
+  provisional: number;
+  active: number;
+  rejected: number;
+  suspended: number;
+  students: number;
+  reports: number;
+  platformAdmins: number;
+  byPlan: Record<string, number>;
+  recentSchools: { id: number; name: string; code: string; status: string; plan?: string | null; district?: string | null; created_at?: string }[];
+}
+
+export interface PlatformActivityItem {
+  id: number;
+  actor: string;
+  action: string;
+  detail?: string | null;
+  school_id?: number | null;
+  created_at?: string;
+}
+
+export interface PlatformAdminUser {
+  id: number;
+  username: string;
+  name?: string | null;
+  is_active: boolean;
+  created_at?: string;
+}
+
+export interface PlatformNoticeItem {
+  id: number;
+  title: string;
+  body: string;
+  audience?: string;
+  school_id?: number | null;
+  created_at?: string;
+}
+
+export function apiPlatformStats(): Promise<PlatformStats> {
+  return request('/platform/stats');
+}
+
+export function apiPlatformSchoolDetail(id: number): Promise<PlatformSchoolDetail> {
+  return request(`/platform/schools/${id}`);
+}
+
+export function apiSuspendSchool(id: number): Promise<PlatformSchool> {
+  return request(`/platform/schools/${id}/suspend`, { method: 'POST' });
+}
+
+export function apiResumeSchool(id: number): Promise<PlatformSchool> {
+  return request(`/platform/schools/${id}/resume`, { method: 'POST' });
+}
+
+export function apiReactivateSchool(id: number): Promise<PlatformSchool> {
+  return request(`/platform/schools/${id}/reactivate`, { method: 'POST' });
+}
+
+export function apiDeleteSchool(id: number): Promise<{ ok: boolean }> {
+  return request(`/platform/schools/${id}`, { method: 'DELETE' });
+}
+
+export function apiEditSchool(
+  id: number,
+  payload: { name?: string; district?: string; head_teacher?: string; email?: string; phone?: string; contact_name?: string },
+): Promise<PlatformSchool> {
+  return request(`/platform/schools/${id}`, { method: 'PATCH', body: JSON.stringify(payload) });
+}
+
+export function apiSetPlan(
+  id: number,
+  payload: { plan: string; billing_status?: string },
+): Promise<PlatformSchool> {
+  return request(`/platform/schools/${id}/plan`, { method: 'PUT', body: JSON.stringify(payload) });
+}
+
+export function apiResetSchoolPassword(id: number, new_password: string): Promise<PlatformSchool> {
+  return request(`/platform/schools/${id}/reset-password`, { method: 'POST', body: JSON.stringify({ new_password }) });
+}
+
+export function apiPlatformAdmins(): Promise<PlatformAdminUser[]> {
+  return request('/platform/admins');
+}
+
+export function apiCreatePlatformAdmin(payload: { username: string; password: string; name?: string }): Promise<{ ok: boolean }> {
+  return request('/platform/admins', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export function apiTogglePlatformAdmin(id: number): Promise<{ ok: boolean; is_active: boolean }> {
+  return request(`/platform/admins/${id}/toggle`, { method: 'POST' });
+}
+
+export function apiPlatformNotifications(): Promise<PlatformNoticeItem[]> {
+  return request('/platform/notifications');
+}
+
+export function apiCreatePlatformNotification(payload: { title: string; body: string; audience?: string; school_id?: number }): Promise<{ ok: boolean }> {
+  return request('/platform/notifications', { method: 'POST', body: JSON.stringify(payload) });
+}
+
+export function apiDeletePlatformNotification(id: number): Promise<{ ok: boolean }> {
+  return request(`/platform/notifications/${id}`, { method: 'DELETE' });
+}
+
+export function apiPlatformActivity(): Promise<PlatformActivityItem[]> {
+  return request('/platform/activity');
 }
